@@ -1,0 +1,34 @@
+# Copy to <your-repo>/build-plan/config.yaml and adjust.
+# Tickets are GitHub Issues (open = to-do, closed = done); this file holds
+# project-wide config only, never ticket data.
+project:
+  name: MyProject
+  repo: "owner/repo"
+  project_number: 1        # GitHub Project (v2) board number; omit to skip boards
+  build_through: M5        # highest milestone agents may build ($BUILD_THROUGH overrides)
+  board_status: false      # true → push Status via API (costs GraphQL quota)
+projects: {}               # optional milestone → project_number overrides, e.g. {M13: 2}
+
+# Project-type tooling. Omitting this section preserves the original
+# swift-project defaults, so pre-extraction configs work unchanged.
+tooling:
+  # Acceptance commands must start with one of these to be executed by verify/finish:
+  runnable: [bash, sh, python, python3, kubectl, kubeconform, helm, pytest, shellcheck, cd]
+  # Per-command working directory (first match wins; default repo root):
+  cwd_rules:
+    - {command: swift, dir: Packages/MyCore}
+  # Where `--filter <Name>` test files live (auto-staged by finish/submit):
+  test_path_template: "Packages/MyCore/Tests/MyCoreTests/{name}.swift"
+  # Extra build gate for tickets touching these paths/labels (omit to disable):
+  app_build:
+    paths: ["App/", "AppTests/"]
+    labels: ["area:ui"]
+    command: "xcodebuild -scheme App -destination 'generic/platform=iOS Simulator' build -quiet"
+  # Doc searched for §N citations by `show`:
+  schema_doc: docs/Data-Model-Schema.md
+  # Acceptance line for `new` when no body is given:
+  default_acceptance: "python3 -m pytest -q"
+
+# Env knobs (all optional): AGENT_BOARD, AGENT_MAX_WORKERS, AGENT_BUILD_RAM_GB,
+# AGENT_RAM_RESERVE_GB, AGENT_APP_BUILD_CMD, BUILD_THROUGH, PROJECT_NUMBER.
+# Legacy NIFFLER_* names are honored as fallbacks.
