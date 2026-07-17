@@ -45,3 +45,34 @@ commands are executed by `verify`/`finish`; anything else is a human checklist.
 Conventions that make agent execution safe: tickets declare their files and
 agents may touch nothing else; `human`-labeled tickets are dependencies, never
 picked up; acceptance must pass before any commit; the tooling owns git.
+
+## Session provenance (Entire)
+
+`finish` and `land` merge with `gh pr merge --squash --delete-branch`. GitHub
+builds a **new** commit server-side and deletes the branch, so any
+[Entire](https://entire.io) checkpoint that the post-commit hook attached to the
+local task-branch commit is orphaned — it points at a SHA that never reaches
+`main`, and the agent session that wrote the code loses its link to the merged
+work.
+
+Enable the opt-in `entire:` block in `config.yaml` and the toolkit re-anchors the
+session onto the squash commit after the merge:
+
+```yaml
+entire:
+  enabled: true
+  agent: claude-code   # passed to `entire session attach --agent`
+  amend: false         # link via the metadata ref only — no history rewrite on main
+```
+
+- **Serial (`finish`):** captures the active session before the git ceremony and
+  runs `entire session attach <sid>` once `main` is updated.
+- **Parallel (`submit` → `land`):** `submit` records the worker's session id as an
+  `Entire-Session:` trailer in the PR body; `land` reads it back and re-anchors
+  after the merge, **before** tearing down the worktree (and its session store).
+
+With `amend: false` the attach links through Entire's metadata ref and never
+rewrites or force-pushes `main`. The whole path is best-effort — an Entire
+failure prints a note but never blocks a land. Omit the block entirely (the
+default) and the toolkit stays Entire-unaware. Requires the `entire` CLI on PATH
+and `entire enable` already run in the target repo.

@@ -29,6 +29,19 @@ tooling:
   # Acceptance line for `new` when no body is given:
   default_acceptance: "python3 -m pytest -q"
 
+# Session provenance (Entire). Omit this block entirely to keep the toolkit
+# Entire-unaware (the default). When enabled, finish/land run
+# `entire session attach` after the squash-merge to re-anchor the farming
+# session onto the surviving squash commit — otherwise `gh pr merge --squash`
+# orphans the checkpoint the post-commit hook left on the deleted task branch.
+entire:
+  enabled: false         # true → re-anchor sessions after each finish/land
+  agent: claude-code     # agent name passed to `entire session attach --agent`
+  amend: false           # false → link via Entire's metadata ref only (no rewrite,
+                         #   safe on an already-pushed main). true → also amend the
+                         #   squash commit with the trailer (rewrites HEAD; only for
+                         #   local-only flows where main isn't pushed yet).
+
 # Env knobs (all optional): AGENT_BOARD, AGENT_MAX_WORKERS, AGENT_BUILD_RAM_GB,
 # AGENT_RAM_RESERVE_GB, AGENT_APP_BUILD_CMD, BUILD_THROUGH, PROJECT_NUMBER.
 # Legacy NIFFLER_* names are honored as fallbacks.

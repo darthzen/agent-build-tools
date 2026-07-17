@@ -355,6 +355,70 @@ def cmd_verify(tid):
     print("PASS" if ok else "FAILED")
     sys.exit(0 if ok else 1)
 
+# ---- Entire session-provenance seam (opt-in via config `entire:`) ----------
+# finish/land squash-merge through `gh pr merge --squash --delete-branch`, which
+# builds a NEW commit server-side and deletes the branch. Any Entire checkpoint
+# the post-commit hook attached to the local task-branch commit is thereby
+# orphaned — it points at a SHA that never reaches main. These helpers re-anchor
+# the farming session onto the squash commit once main is updated. WITHOUT
+# --force the attach links via Entire's metadata ref and does NOT rewrite or
+# force-push main. Everything here is best-effort: provenance must never block a
+# land. Omit the `entire:` config block and the toolkit stays Entire-unaware.
+ENTIRE_MARKER = "Entire-Session:"
+
+def entire_cfg():
+    return config().get("entire") or {}
+
+def entire_on():
+    return bool(entire_cfg().get("enabled"))
+
+def _entire(args, cwd=REPO):
+    return subprocess.run(["entire", *args], text=True, capture_output=True, cwd=cwd)
+
+def entire_session_id(cwd=REPO):
+    """Active Entire session id for `cwd`, or None. Best-effort."""
+    if not entire_on():
+        return None
+    r = _entire(["session", "current", "--json"], cwd=cwd)
+    if r.returncode == 0:
+        try:
+            sid = (json.loads(r.stdout or "{}") or {}).get("session_id")
+            if sid:
+                return sid
+        except Exception:
+            pass
+    m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                  r.stdout or "")
+    return m.group(0) if m else None
+
+def entire_pr_marker(sid):
+    """Trailer appended to a PR body so `land` (run from another checkout) can
+    recover the worker's session id after a parallel `submit`."""
+    return f"\n\n{ENTIRE_MARKER} {sid}" if (entire_on() and sid) else ""
+
+def entire_session_from_body(body):
+    m = re.search(rf"(?m)^{re.escape(ENTIRE_MARKER)}\s*(\S+)\s*$", body or "")
+    return m.group(1) if m else None
+
+def entire_relink(sid, cwd=REPO):
+    """Re-anchor session `sid` onto HEAD (the squash commit). Best-effort;
+    a failure prints a note but never blocks the merge."""
+    if not (entire_on() and sid):
+        return
+    args = ["session", "attach", sid, "--agent", entire_cfg().get("agent") or "claude-code"]
+    if entire_cfg().get("amend"):
+        args.append("--force")
+    r = _entire(args, cwd=cwd)
+    if r.returncode == 0:
+        print(f"entire: re-anchored session {sid[:12]}… onto current main")
+    else:
+        why = ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[0]
+        print(f"(entire: re-anchor skipped for {sid[:12]}… — {why})")
+
+def _pr_body(slug, branch):
+    r = sh(["gh", "pr", "view", branch, "--repo", slug, "--json", "body", "-q", ".body"])
+    return r.stdout if r.returncode == 0 else ""
+
 # ---- finish (git + PR + issue) --------------------------------------------
 def issue_number(slug, tid):
     out = sh(["gh", "issue", "list", "--repo", slug, "--state", "all",
@@ -368,6 +432,7 @@ def cmd_finish(tid):
     cfg = load(); t = by_id(cfg).get(tid)
     if not t:
         sys.exit(f"unknown task {tid}")
+    sid = entire_session_id()   # farming session, captured before the git ceremony
 
     # 1. gate on acceptance (build + tests/lint must pass); app-target tickets
     #    additionally must compile the app so broken UI can't merge.
@@ -425,6 +490,7 @@ def cmd_finish(tid):
     # 6. sync main, drop the local task branch
     sh(["git", "checkout", "main"], check=True)
     sh(["git", "pull", "--ff-only"])
+    entire_relink(sid)   # re-anchor the farming session onto the squash commit
     sh(["git", "branch", "-D", branch])
     set_status(slug, tid, "Done")
     if sh(["git", "status", "--porcelain"]).stdout.strip():
@@ -569,6 +635,7 @@ def cmd_submit(tid):
     if cmds and not run_cmds(cmds):
         sys.exit(f"BLOCKED: acceptance/build failed for {tid}; nothing pushed.")
     slug = repo_slug(); n = issue_number(slug, tid); branch = current_branch()
+    sid = entire_session_id()   # worker's farming session (this worktree)
     # An isolated worktree contains ONLY this ticket's edits, so add -A is safe
     # and captures cross-file changes the Files list forgot.
     sh(["git", "add", "-A"])
@@ -583,7 +650,8 @@ def cmd_submit(tid):
     sh(["git", "commit", "-m", f"[{tid}] {t['title']}{closes}"], check=True)
     sh(["git", "push", "-u", "origin", branch], check=True)
     pr = sh(["gh", "pr", "create", "--repo", slug, "--base", "main", "--head", branch,
-             "--title", f"[{tid}] {t['title']}", "--body", (closes.strip() or t["title"])])
+             "--title", f"[{tid}] {t['title']}",
+             "--body", (closes.strip() or t["title"]) + entire_pr_marker(sid)])
     ok = pr.returncode == 0 or "already exists" in (pr.stderr or "")
     print(f"SUBMITTED {tid} branch={branch} pr={'ok' if ok else pr.stderr.strip()}")
 
@@ -621,6 +689,7 @@ def cmd_land(tid):
     lock = _land_lock()
     try:
         ensure_pr(slug, tid, branch)
+        sid = entire_session_from_body(_pr_body(slug, branch))   # worker session, threaded via PR
         m = sh(["gh", "pr", "merge", branch, "--repo", slug, "--squash", "--delete-branch"])
         if m.returncode != 0 and os.path.isdir(wt):
             sh(["git", "-C", wt, "fetch", "origin", "main"])
@@ -634,6 +703,7 @@ def cmd_land(tid):
         if m.returncode != 0:
             sys.exit(f"BLOCKED: land failed for {tid}:\n{(m.stderr or m.stdout).strip()}")
         sh(["git", "checkout", "main"]); sh(["git", "pull", "--ff-only"])
+        entire_relink(sid)   # re-anchor before the worktree (and its session store) is torn down
         sh(["git", "worktree", "remove", "--force", wt])
         sh(["git", "branch", "-D", branch])
         set_status(slug, tid, "Done")
