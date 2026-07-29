@@ -1,4 +1,6 @@
 # agent-build-tools
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdarthzen%2Fagent-build-tools.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdarthzen%2Fagent-build-tools?ref=badge_shield)
+
 
 GitHub-Issues-native ticketing toolkit for agent-driven software builds. A
 ticket IS a GitHub Issue — open = to-do, closed = done, no shadow task files.
@@ -76,3 +78,7 @@ rewrites or force-pushes `main`. The whole path is best-effort — an Entire
 failure prints a note but never blocks a land. Omit the block entirely (the
 default) and the toolkit stays Entire-unaware. Requires the `entire` CLI on PATH
 and `entire enable` already run in the target repo.
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdarthzen%2Fagent-build-tools.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdarthzen%2Fagent-build-tools?ref=badge_large)
