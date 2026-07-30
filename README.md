@@ -46,6 +46,49 @@ Conventions that make agent execution safe: tickets declare their files and
 agents may touch nothing else; `human`-labeled tickets are dependencies, never
 picked up; acceptance must pass before any commit; the tooling owns git.
 
+## Model provenance (`Generated-By:`)
+
+Entire — and git — attribute a ticket to the **agent session** that ran it. When
+that session delegates the actual code generation to another model, the delegate
+gets no attribution: an [ollama-code-mcp](https://github.com/darthzen/ollama-code-mcp)
+call handing a ticket to `qwen3-coder:30b` is a tool call *inside* the Claude Code
+session, so it installs no hooks, spends no tokens Entire can see, and the
+checkpoint reads as pure `claude-code` work even though another model wrote the
+diff.
+
+Enable the opt-in `provenance:` block and `finish`/`submit` record the writing
+model as a trailer:
+
+```yaml
+provenance:
+  enabled: true
+  generated_by: "qwen3-coder:30b (ollama-code-mcp)"
+```
+
+```
+[T-009] vulnerability: nv_get_scan_report with client-side severity filter
+
+Closes #9
+
+Generated-By: qwen3-coder:30b (ollama-code-mcp)
+```
+
+The trailer goes on the branch commit **and** in the PR body. The body is the
+part that matters: `gh pr merge --squash` builds a new commit message from the PR
+title and body, so a trailer that lives only on the branch commit dies with the
+branch — the same way an un-re-anchored Entire checkpoint does. Because it lands
+on `main`, it is greppable forever (`git log --grep '^Generated-By:'`) and it
+shows up in the Entire checkpoint, since checkpoints are tied to commits.
+
+`$AGENT_GENERATED_BY` overrides `generated_by` for one run, so a fleet of workers
+on different models can each record their own without touching `config.yaml`.
+Omit the block and the toolkit stays provenance-unaware.
+
+**What this does not give you:** it is per *ticket*, not per file or per hunk. If
+the driving agent rewrites half of what the delegate returned, a flat
+`Generated-By:` overstates the delegate's share. Treat it as "this model was in
+the loop for this ticket", not as a measured contribution.
+
 ## Session provenance (Entire)
 
 `finish` and `land` merge with `gh pr merge --squash --delete-branch`. GitHub

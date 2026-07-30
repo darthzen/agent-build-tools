@@ -419,6 +419,48 @@ def _pr_body(slug, branch):
     r = sh(["gh", "pr", "view", branch, "--repo", slug, "--json", "body", "-q", ".body"])
     return r.stdout if r.returncode == 0 else ""
 
+# ---- model provenance seam (opt-in via config `provenance:`) ---------------
+# Entire attributes work to an agent *session* (claude-code, codex, cursor, …).
+# When that session delegates code generation to another model — e.g. Claude Code
+# handing a ticket to qwen3-coder:30b over ollama-code-mcp — the delegate is an
+# MCP tool call inside the session, not a session of its own: it installs no
+# hooks, spends no tokens Entire can see, and gets no attribution. The checkpoint
+# reads as pure claude-code work even though another model wrote the diff.
+#
+# This seam records the writing model as a `Generated-By:` trailer. Omit the
+# `provenance:` config block entirely (the default) and nothing changes.
+PROVENANCE_MARKER = "Generated-By:"
+
+def provenance_cfg():
+    return config().get("provenance") or {}
+
+def provenance_on():
+    return bool(provenance_cfg().get("enabled"))
+
+def generated_by():
+    """The model that wrote this ticket's code, or None when unset/disabled.
+    $AGENT_GENERATED_BY overrides the config value so a single worker can record
+    a per-run model without editing config.yaml."""
+    if not provenance_on():
+        return None
+    return (_env2("GENERATED_BY") or provenance_cfg().get("generated_by") or "").strip() or None
+
+def provenance_trailer():
+    """`Generated-By: <model>` for the commit message AND the PR body.
+
+    It has to go in the PR body, not just the branch commit: finish/land
+    squash-merge through `gh pr merge --squash --delete-branch`, and GitHub builds
+    the squash commit message from the PR title and body. A trailer that lives
+    only on the branch commit is deleted with the branch and never reaches main —
+    the same failure that orphans Entire checkpoints (see ENTIRE_MARKER above)."""
+    m = generated_by()
+    return f"\n\n{PROVENANCE_MARKER} {m}" if m else ""
+
+def generated_by_from_body(body):
+    """Read the trailer back out of a PR body or commit message."""
+    m = re.search(rf"(?m)^{re.escape(PROVENANCE_MARKER)}\s*(.+?)\s*$", body or "")
+    return m.group(1) if m else None
+
 # ---- finish (git + PR + issue) --------------------------------------------
 def issue_number(slug, tid):
     out = sh(["gh", "issue", "list", "--repo", slug, "--state", "all",
@@ -474,12 +516,13 @@ def cmd_finish(tid):
 
     # 4. commit
     closes = f"\n\nCloses #{n}" if n else ""
-    sh(["git", "commit", "-m", f"[{tid}] {t['title']}{closes}"], check=True)
+    prov = provenance_trailer()   # empty unless `provenance:` is configured
+    sh(["git", "commit", "-m", f"[{tid}] {t['title']}{closes}{prov}"], check=True)
 
     # 5. push, open PR, squash-merge (closes the issue via "Closes #n")
     sh(["git", "push", "-u", "origin", branch], check=True)
     sh(["gh", "pr", "create", "--repo", slug, "--base", "main", "--head", branch,
-        "--title", f"[{tid}] {t['title']}", "--body", (closes.strip() or t["title"])])
+        "--title", f"[{tid}] {t['title']}", "--body", (closes.strip() or t["title"]) + prov])
     m = sh(["gh", "pr", "merge", branch, "--repo", slug, "--squash", "--delete-branch"])
     if m.returncode != 0:
         sh(["git", "checkout", "main"])
@@ -647,11 +690,12 @@ def cmd_submit(tid):
         print(f"NOOP {tid}: already satisfied; closed" + (f" #{n}" if n else "") + ".")
         sys.exit(0)
     closes = f"\n\nCloses #{n}" if n else ""
-    sh(["git", "commit", "-m", f"[{tid}] {t['title']}{closes}"], check=True)
+    prov = provenance_trailer()   # empty unless `provenance:` is configured
+    sh(["git", "commit", "-m", f"[{tid}] {t['title']}{closes}{prov}"], check=True)
     sh(["git", "push", "-u", "origin", branch], check=True)
     pr = sh(["gh", "pr", "create", "--repo", slug, "--base", "main", "--head", branch,
              "--title", f"[{tid}] {t['title']}",
-             "--body", (closes.strip() or t["title"]) + entire_pr_marker(sid)])
+             "--body", (closes.strip() or t["title"]) + prov + entire_pr_marker(sid)])
     ok = pr.returncode == 0 or "already exists" in (pr.stderr or "")
     print(f"SUBMITTED {tid} branch={branch} pr={'ok' if ok else pr.stderr.strip()}")
 
@@ -673,7 +717,7 @@ def ensure_pr(slug, tid, branch):
     cfg = load(); t = by_id(cfg).get(tid)
     n = issue_number(slug, tid)
     title = f"[{tid}] {t['title']}" if t else tid
-    body = f"Closes #{n}" if n else (t["title"] if t else tid)
+    body = (f"Closes #{n}" if n else (t["title"] if t else tid)) + provenance_trailer()
     sh(["gh", "pr", "create", "--repo", slug, "--base", "main", "--head", branch,
         "--title", title, "--body", body])
 

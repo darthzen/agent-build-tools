@@ -29,6 +29,19 @@ tooling:
   # Acceptance line for `new` when no body is given:
   default_acceptance: "python3 -m pytest -q"
 
+# Model provenance. Omit this block entirely (the default) and nothing is
+# recorded. When enabled, finish/submit append a `Generated-By: <model>` trailer
+# to the commit message AND the PR body — the body is what matters, because the
+# squash-merge builds its commit message from the PR title and body.
+#
+# Use it when the agent session delegates code generation to another model: an
+# ollama-code-mcp / qwen call is a tool call inside the session, so Entire (and
+# git) otherwise attribute the whole diff to the driving agent. $AGENT_GENERATED_BY
+# overrides `generated_by` for a single run.
+provenance:
+  enabled: false
+  generated_by: "qwen3-coder:30b (ollama-code-mcp)"
+
 # Session provenance (Entire). Omit this block entirely to keep the toolkit
 # Entire-unaware (the default). When enabled, finish/land run
 # `entire session attach` after the squash-merge to re-anchor the farming
